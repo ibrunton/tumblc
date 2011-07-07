@@ -17,6 +17,7 @@ char editor [80];
 int sent = 0;
 char tumblrapi [] = "http://www.tumblr.com/api/write";
 char *draft_filename;
+char *temp_file;
 
 /* curl */
 CURL *curl;
@@ -96,7 +97,7 @@ int main (int argc, char *argv[])
     strcpy (editor, getenv ("EDITOR"));
 
   /* Create temporary filename and prepare editor command */
-  char *temp_file = tempnam ("/tmp", "tumblc");
+  temp_file = tempnam ("/tmp", "tumblc");
   size_t leneditor = strlen (editor);
   size_t lentemp = strlen (temp_file);
   char *edit_command = malloc (leneditor + lentemp + 2);
@@ -149,6 +150,7 @@ int main (int argc, char *argv[])
 	++ti;
       }
       post_content.tags[ti] = '\0';
+      break;
     case 'r': /* review post */
       /* clear screen... */
       printf ("Your post:\n");
@@ -232,56 +234,90 @@ void saveDraft ()
 
 void sendPost ()
 {
-  /* read in temp file to post_content.data */
+  FILE *fp;
+  int c;
+  int bi = 0;
+  size_t file_size;
+
+  fp = fopen (temp_file, "rb");
+  if (fp == 0)
+    printf ("Could not open file.\n");
+
+  fseek (fp, 0, SEEK_END);
+  file_size = ftell (fp);
+  fclose (fp);
+  post_content.body = malloc (file_size + 1);
+
+  fp = fopen (temp_file, "r");
+  while ((c = fgetc (fp)) != EOF) {
+    post_content.body[bi] = (char)c;
+    ++bi;
+  }
+  post_content.body[bi] = '\0';
+  fclose (fp);
+
+  /* printf ("Title: %s\n",post_content.title); */
+  /* printf ("Tags: %s\n",post_content.tags); */
+  /* printf ("Type: %s\n",post_content.type); */
+  /* printf ("State: %s\n",post_content.state); */
+  /* printf ("Generator: %s\n",post_content.generator); */
+  /* printf ("Email: %s\n",post_content.email); */
+  /* printf ("Password: %s\n",post_content.password); */
+  /* printf ("Body: %s\n\n",buf); */
+
+  /* take care of defaults */
+  if (strlen (post_content.state) < 2)
+    strcpy (post_content.state, "published\0");
+
   curl_global_init (CURL_GLOBAL_ALL);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "email",
-		CURLFORM_COPYCONTENTS, post_content.email,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "email",
+  		CURLFORM_COPYCONTENTS, post_content.email,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "password",
-		CURLFORM_COPYCONTENTS, post_content.password,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "password",
+  		CURLFORM_COPYCONTENTS, post_content.password,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "generator",
-		CURLFORM_COPYCONTENTS, post_content.generator,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "generator",
+  		CURLFORM_COPYCONTENTS, post_content.generator,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "type",
-		CURLFORM_COPYCONTENTS, post_content.type,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "type",
+  		CURLFORM_COPYCONTENTS, post_content.type,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "title",
-		CURLFORM_COPYCONTENTS, post_content.title,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "title",
+  		CURLFORM_COPYCONTENTS, post_content.title,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "tags",
-		CURLFORM_COPYCONTENTS, post_content.tags,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "tags",
+  		CURLFORM_COPYCONTENTS, post_content.tags,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "state",
-		CURLFORM_COPYCONTENTS, post_content.state,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "state",
+  		CURLFORM_COPYCONTENTS, post_content.state,
+  		CURLFORM_END);
   
   curl_formadd (&formpost,
-		&lastptr,
-		CURLFORM_COPYNAME, "body",
-		CURLFORM_COPYCONTENTS, post_content.body,
-		CURLFORM_END);
+  		&lastptr,
+  		CURLFORM_COPYNAME, "body",
+  		CURLFORM_COPYCONTENTS, post_content.body,
+  		CURLFORM_END);
   
   curl = curl_easy_init ();
   
@@ -294,13 +330,16 @@ void sendPost ()
     curl_easy_setopt (curl, CURLOPT_HTTPPOST, formpost);
     res = curl_easy_perform (curl);
     
-    /* always cleanup */ 
+    /* always cleanup */
     curl_easy_cleanup (curl);
     
-    /* then cleanup the formpost chain */ 
+    /* then cleanup the formpost chain */
     curl_formfree (formpost);
-    /* free slist */ 
+    /* free slist */
     curl_slist_free_all (headerlist);
+    remove (temp_file);
   }
    /* set "sent" flag */
+
+  free (post_content.body);
 }
