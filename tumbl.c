@@ -1,16 +1,30 @@
-/* Tumblr Client */
+/* tumblc, a command-line client for Tumblr, written in C */
 /* by Ian Brunton <iandbrunton@gmail.com> */
 /* <2011-07-02 Sat> */
 
+#define VERSION "0.1a"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#include <curl/curl.h>
 
 /* global variables */
 FILE *fr;
 char editor [80];
 int sent = 0;
+char tumblrapi [] = "http://www.tumblr.com/api/write";
+char *draft_filename;
+
+/* curl */
+CURL *curl;
+CURLcode res;
+struct curl_httppost *formpost=NULL;
+struct curl_httppost *lastptr=NULL;
+struct curl_slist *headerlist=NULL;
+static const char buf[] = "Expect:";
 
 /* data to be sent to server */
 struct form {
@@ -18,16 +32,23 @@ struct form {
   char password [80];
   char generator [80];
   char type [80];
+  char state [16];
   char title [256];
   char tags [256];
-  char *data;
+  char *body;
 } post_content;
 
 /* functions */
 void showMenu ();
+void saveDraft ();
+void sendPost ();
 
 int main (int argc, char *argv[])
 {
+ 
+  printf ("--------------[ tumblc %s, a Tumblr command-line client ]--------------\n\n",
+	  VERSION);
+
   /* get config filename */
   char *config_dir = getenv ("XDG_CONFIG_HOME");
   char *rc_file_name = "/tumblrrc";
@@ -62,18 +83,13 @@ int main (int argc, char *argv[])
     
     if (strcmp (field_name, "email\0") == 0)
       strcpy (post_content.email, field_value);
-
     else if (strcmp (field_name, "password\0") == 0)
       strcpy (post_content.password, field_value);
-
     else if (strcmp (field_name, "editor\0") == 0)
       strcpy (editor, field_value);
   }
   fclose (fr);
   free (rc_file);
-
-  /* printf ("\nEmail: %s\nPassword: %s\nEditor: %s\n", */
-  /* 	  post_content.email, post_content.password, editor); */
 
   /* if editor is not set in config file, use environment variable */
   if (strlen (editor) == 0)
@@ -89,42 +105,202 @@ int main (int argc, char *argv[])
   memcpy (edit_command + leneditor + 1, temp_file, lentemp + 1);
 
   strcpy (post_content.generator, "tumblc by Ian D Brunton\0");
-  strcpy (post_content.type, "text\0");
+  strcpy (post_content.type, "regular\0");
 
-  char menu_selection = '0';
+  /* Get menu selection & act accordingly */
+  int menuin;
+  char menu_selection;
+
+  int ti = 0;
 
   while (menu_selection != 'q') {
     showMenu ();
+    printf ("Enter choice, and press return: ");
+    while ((menuin = getchar ()) != '\n')
+      menu_selection = (char)menuin;
 
     switch (menu_selection) {
     case 'e': /* edit post */
       system (edit_command);
       break;
     case 't': /* edit title */
+      printf ("Title: ");
+      ti = 0;
+      while ((menuin = getchar ()) != '\n') {
+	post_content.title[ti] = (char)menuin;
+	++ti;
+      }
+      post_content.title[ti] = '\0';
       break;
     case 'g': /* edit tags */
+      printf ("Tags: ");
+      ti = 0;
+      while ((menuin = getchar ()) != '\n') {
+	post_content.tags[ti] = (char)menuin;
+	++ti;
+      }
+      post_content.tags[ti] = '\0';
+      break;
+    case 'a': /* edit state */
+      printf ("State (draft, published): ");
+      ti = 0;
+      while ((menuin = getchar ()) != '\n') {
+	post_content.state[ti] = (char)menuin;
+	++ti;
+      }
+      post_content.tags[ti] = '\0';
+    case 'r': /* review post */
+      /* clear screen... */
+      printf ("Your post:\n");
+      printf ("Title: %s\n", post_content.title);
+      printf ("Tags: %s\n", post_content.tags);
+      printf ("\n\n");
+      /* send to PAGER */
       break;
     case 's': /* save draft for later */
-      /* prompt for filename */
+      saveDraft ();
       break;
     case 'p': /* post to tumblr */
-      /* read in temp file to post_content.data */
-      /* uri-encode all fields */
-      /* join all fields */
-      /* send to tumblr */
-      /* set "sent" flag */
+      sendPost ();
+      break;
+    case 'q':
+      break;
+    default:
+      printf ("Invalid option.\n");
       break;
     }
+
   }
 
-  if (sent == 1) {
-    /* do you want to save your post? */
-  }
+  /* 'q' for Quit, but post not yet sent */
+  /* if (sent == 0) { */
+  /*   char save_choice; */
+  /*   printf ("Draft is not empty. Do you want to save it? [Y/n] "); */
+  /*   scanf ("%c", &save_choice); */
+  /*   if (save_choice == 'Y' || save_choice == 'y') */
+  /*     saveDraft (); */
+  /* } */
 
   free (edit_command);
+  /* free post_content.data; */
+  /* delete temp file */
+  printf ("\nThank you for using tumblc.\n\n");
   return 0;
 } /* of main */
 
 void showMenu ()
 {
+  printf ("MAIN MENU:\n\n");
+  printf ("[e] Edit post\n");
+  printf ("[t] Edit title\n");
+  printf ("[g] Edit tags\n");
+  printf ("[a] Edit post state\n");
+  printf ("[r] Review post\n");
+  printf ("[s] Save post as draft\n");
+  printf ("[p] Send post to Tumblr\n");
+  printf ("[q] Quit\n\n");
+  return;
+}
+
+void saveDraft ()
+{
+  /* set up draft dir */
+  char *xdg_data = getenv ("XDG_DATA_HOME");
+  char *draft_location = "/tumblc/draft";
+
+  char draft_str [15]; /* YYYYMMDDHHMMSS: "20110706120732\0" */
+  time_t time_raw_format;
+  struct tm * time_struct;
+  time (&time_raw_format);
+  time_struct = localtime (&time_raw_format);
+  strftime (draft_str, 16, "%Y%m%d%H%M%S", time_struct);
+
+  size_t lenxdgdata = strlen (xdg_data);
+  size_t lendraftloc = strlen (draft_location);
+  size_t lendraftstr = strlen (draft_str);
+
+  draft_filename = malloc (lenxdgdata + lendraftloc + lendraftstr + 3);
+  memcpy (draft_filename, xdg_data, lenxdgdata);
+  memcpy (draft_filename + lenxdgdata, draft_location, lendraftloc);
+  memcpy (draft_filename + lenxdgdata + lendraftloc, draft_str, lendraftstr + 1);
+
+  printf ("Saving draft to file `%s'...", draft_filename);
+  /* ... */
+  printf (" Draft saved.\n");
+  return;
+}
+
+void sendPost ()
+{
+  /* read in temp file to post_content.data */
+  curl_global_init (CURL_GLOBAL_ALL);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "email",
+		CURLFORM_COPYCONTENTS, post_content.email,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "password",
+		CURLFORM_COPYCONTENTS, post_content.password,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "generator",
+		CURLFORM_COPYCONTENTS, post_content.generator,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "type",
+		CURLFORM_COPYCONTENTS, post_content.type,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "title",
+		CURLFORM_COPYCONTENTS, post_content.title,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "tags",
+		CURLFORM_COPYCONTENTS, post_content.tags,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "state",
+		CURLFORM_COPYCONTENTS, post_content.state,
+		CURLFORM_END);
+  
+  curl_formadd (&formpost,
+		&lastptr,
+		CURLFORM_COPYNAME, "body",
+		CURLFORM_COPYCONTENTS, post_content.body,
+		CURLFORM_END);
+  
+  curl = curl_easy_init ();
+  
+  headerlist = curl_slist_append (headerlist, buf);
+  if(curl) {
+    curl_easy_setopt (curl, CURLOPT_URL, tumblrapi);
+    /* if ((argc == 2) && (!strcmp (argv[1], "noexpectheader")) ) */
+    /*   /\* only disable 100-continue header if explicitly requested *\/  */
+    /*   curl_easy_setopt (curl, CURLOPT_HTTPHEADER, headerlist); */
+    curl_easy_setopt (curl, CURLOPT_HTTPPOST, formpost);
+    res = curl_easy_perform (curl);
+    
+    /* always cleanup */ 
+    curl_easy_cleanup (curl);
+    
+    /* then cleanup the formpost chain */ 
+    curl_formfree (formpost);
+    /* free slist */ 
+    curl_slist_free_all (headerlist);
+  }
+   /* set "sent" flag */
 }
