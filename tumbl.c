@@ -7,7 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 
 #include <curl/curl.h>
 
@@ -17,6 +20,7 @@ char editor [80];
 int sent = 0;
 char tumblrapi [] = "http://www.tumblr.com/api/write";
 char *draft_filename;
+char *draft_directory;
 char *temp_file;
 
 /* curl */
@@ -38,6 +42,14 @@ struct form {
   char tags [256];
   char *body;
 } post_content;
+
+/*for reading directories*/
+typedef struct filenode {
+  char *name;
+  size_t size;
+  int index;
+  struct filenode *next;
+} filenode;
 
 /* functions */
 void showMenu ();
@@ -233,6 +245,7 @@ int saveDraft ()
 {
   /* set up draft dir */
   char *xdg_data = getenv ("XDG_DATA_HOME");
+  char *draft_dir = "/tumblc/";
   char *draft_location = "/tumblc/draft";
 
   char draft_str [15]; /* YYYYMMDDHHMMSS: "20110706120732\0" */
@@ -243,8 +256,13 @@ int saveDraft ()
   strftime (draft_str, 16, "%Y%m%d%H%M%S", time_struct);
 
   size_t lenxdgdata = strlen (xdg_data);
+  size_t lendraftdir = strlen (draft_dir);
   size_t lendraftloc = strlen (draft_location);
   size_t lendraftstr = strlen (draft_str);
+
+  draft_directory = malloc (lenxdgdata + lendraftdir + 2);
+  memcpy (draft_directory, xdg_data, lenxdgdata);
+  memcpy (draft_directory + lenxdgdata, draft_dir, lendraftdir + 1);
 
   draft_filename = malloc (lenxdgdata + lendraftloc + lendraftstr + 3);
   memcpy (draft_filename, xdg_data, lenxdgdata);
@@ -284,11 +302,88 @@ int saveDraft ()
 
 int loadDraft ()
 {
+  filenode* firstFileNode = NULL;
+  filenode* newFileNode = malloc (sizeof (filenode));
+  if (newFileNode == NULL) {
+	fprintf (stderr, "Error allocating memory.\n");
+	return 1;
+  }
+
+  if (firstFileNode == NULL)
+	firstFileNode = newFileNode;
+
   /*get list of existing drafts*/
+  filenode* fileWalker = firstFileNode;
+
+  DIR *dir;
+  FILE *fd;
+  int file_count = 0;
+  struct dirent *ent;
+  struct stat *fileattr = malloc (sizeof (struct stat));
+
+  dir = opendir (draft_directory);
+  while ((ent = readdir (dir)) != NULL) {
+	++file_count;
+	if (stat (end->d_name, fileattr) == 0) {
+	  if (S_ISDIR (fileattr->st_mode) != 0)
+		continue; /* skip directories */
+
+	  strcpy (fileWalker->name, ent->d_name);
+	  fileWalker->size = fileattr->st_size;
+	  fileWalker->index = file_count;
+	  fileWalker->next = malloc (sizeof (filenode));
+	  fileWalker = fileWalker->next;
+	}
+	else {
+	  fprintf (stderr, "Cannot stat file %s: %s\n", fileWalker->name,
+		  strerror (errno));
+	  break;
+	}
+  }
+  closedir (dir);
+  free (fileattr);
+
   /*present list, enumerated*/
+  printf ("%d draft files found.\n", file_count);
+
+  fileWalker = firstfileNode;
+  while (fileWalker->next != NULL) {
+	printf ("%d\t%s (%d bytes)\n", fileWalker->index, fileWalker->name,
+		fileWalker->file_size);
+  }
+
+  printf ("Enter file number: ");
+  int selection;
+  scanf ("%d", &selection);
+
   /*selected file to draft_filename*/
+  fileWalker = firstFileNode;
+  while (fileWalker->next != NULL) {
+	if (fileWalker->index != selection) {
+	  strcpy (draft_filename, fileWalker->name);
+	  break;
+	}
+	else
+	  fileWalker = fileWalker->next;
+  }
+
   /*read file*/
+  FILE *fd;
+  fd = fopen (draft_filename);
+  if (fd == 0) {
+	fprintf (stderr, "Error opening file `%s': %s\n", draft_filename, strerror (errno));
+	return 1;
+  }
+  char *buff = malloc (fileWalker->size);;
+  int dc, ci = 0;
+  while ((dc = fgetc (fd)) != EOF) {
+	buff[ci] = dc;
+	++ci;
+  }
+
   /*parse file contents into variables*/
+  ci = 0;
+  char buf [80];
 
   return 0;
 }
