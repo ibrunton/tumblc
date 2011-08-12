@@ -176,8 +176,6 @@ int main (int argc, char *argv[])
 
     case 'p': /* post to tumblr */
       if (sendPost () == 0) {
-		remove (temp_file);
-		free (post_content.body);
 		sent = 1;
 	  }
 	  else {
