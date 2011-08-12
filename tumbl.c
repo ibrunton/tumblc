@@ -41,8 +41,9 @@ struct form {
 
 /* functions */
 void showMenu ();
-void saveDraft ();
-void sendPost ();
+int saveDraft ();
+int loadDraft ();
+int sendPost ();
 
 int main (int argc, char *argv[])
 {
@@ -107,6 +108,7 @@ int main (int argc, char *argv[])
 
   strcpy (post_content.generator, "tumblc by Ian D Brunton\0");
   strcpy (post_content.type, "regular\0");
+  strcpy (post_content.state, "draft\0");
 
   /* Get menu selection & act accordingly */
   int menuin;
@@ -124,33 +126,37 @@ int main (int argc, char *argv[])
     case 'e': /* edit post */
       system (edit_command);
       break;
+
     case 't': /* edit title */
       printf ("Title: ");
       ti = 0;
       while ((menuin = getchar ()) != '\n') {
-	post_content.title[ti] = (char)menuin;
-	++ti;
+	  	post_content.title[ti] = (char)menuin;
+	  	++ti;
       }
       post_content.title[ti] = '\0';
       break;
+
     case 'g': /* edit tags */
       printf ("Tags: ");
       ti = 0;
       while ((menuin = getchar ()) != '\n') {
-	post_content.tags[ti] = (char)menuin;
-	++ti;
+	  	post_content.tags[ti] = (char)menuin;
+	  	++ti;
       }
       post_content.tags[ti] = '\0';
       break;
+
     case 'a': /* edit state */
       printf ("State (draft, published): ");
       ti = 0;
       while ((menuin = getchar ()) != '\n') {
-	post_content.state[ti] = (char)menuin;
-	++ti;
+	  	post_content.state[ti] = (char)menuin;
+	  	++ti;
       }
-      post_content.tags[ti] = '\0';
+      post_content.state[ti] = '\0';
       break;
+
     case 'r': /* review post */
       /* clear screen... */
       printf ("Your post:\n");
@@ -159,14 +165,31 @@ int main (int argc, char *argv[])
       printf ("\n\n");
       /* send to PAGER */
       break;
+
     case 's': /* save draft for later */
       saveDraft ();
       break;
+
+	case 'l': /* load previously saved draft */
+	  loadDraft ();
+	  break;
+
     case 'p': /* post to tumblr */
-      sendPost ();
+      if (sendPost () == 0) {
+		remove (temp_file);
+		free (post_content.body);
+		sent = 1;
+	  }
+	  else {
+		sent = 0;
+		printf ("Post failed.\n");
+		printf ("[s] Save draft or [p] Try again");
+	  }
       break;
-    case 'q':
+
+    case 'q': /* quit */
       break;
+
     default:
       printf ("Invalid option.\n");
       break;
@@ -175,17 +198,20 @@ int main (int argc, char *argv[])
   }
 
   /* 'q' for Quit, but post not yet sent */
-  /* if (sent == 0) { */
-  /*   char save_choice; */
-  /*   printf ("Draft is not empty. Do you want to save it? [Y/n] "); */
-  /*   scanf ("%c", &save_choice); */
-  /*   if (save_choice == 'Y' || save_choice == 'y') */
-  /*     saveDraft (); */
-  /* } */
+  if (sent == 0) { 
+    printf ("Draft is not empty. Do you want to save it? [Y/n] ");
+	char save_choice;
+	while ((menuin = getchar ()) != '\n')
+	  save_choice = (char)menuin;
+	
+    if (save_choice == 'Y' || save_choice == 'y')
+      saveDraft ();
+  }
 
   free (edit_command);
-  /* free post_content.data; */
+  free (post_content.body);
   /* delete temp file */
+  remove (temp_file);
   printf ("\nThank you for using tumblc.\n\n");
   return 0;
 } /* of main */
@@ -199,12 +225,13 @@ void showMenu ()
   printf ("[a] Edit post state\n");
   printf ("[r] Review post\n");
   printf ("[s] Save post as draft\n");
+  printf ("[l] Load post from draft\n");
   printf ("[p] Send post to Tumblr\n");
   printf ("[q] Quit\n\n");
   return;
 }
 
-void saveDraft ()
+int saveDraft ()
 {
   /* set up draft dir */
   char *xdg_data = getenv ("XDG_DATA_HOME");
@@ -227,12 +254,48 @@ void saveDraft ()
   memcpy (draft_filename + lenxdgdata + lendraftloc, draft_str, lendraftstr + 1);
 
   printf ("Saving draft to file `%s'...", draft_filename);
-  /* ... */
+
+  FILE *fw;
+  fw = fopen (draft_filename, "w");
+  if (fw == 0) {
+	fprintf (stderr, "Could not open file `%s'.\n", draft_filename);
+	return 1;
+  }
+  fprintf (fw, "Title: %s\n", post_content.title);
+  fprintf (fw, "Tags: %s\n", post_content.tags);
+  fprintf (fw, "State: %s\n", post_content.state);
+  fprintf (fw, "--------\n");
+
+  FILE *ft;
+  ft = fopen (temp_file, "r");
+  if (ft == 0) {
+	fprintf (stderr, "Could not open file `%s'.\n", temp_file);
+	return 1;
+  }
+  int tempc;
+  while ((tempc = fgetc(ft)) != EOF) {
+	fputc (tempc, fw);
+	/*fprintf (fw, "%c", (char)tempc);*/
+  }
+  close (ft);
+  fclose (fw);
   printf (" Draft saved.\n");
-  return;
+
+  return 0;
 }
 
-void sendPost ()
+int loadDraft ()
+{
+  /*get list of existing drafts*/
+  /*present list, enumerated*/
+  /*selected file to draft_filename*/
+  /*read file*/
+  /*parse file contents into variables*/
+
+  return 0;
+}
+
+int sendPost ()
 {
   FILE *fp;
   int c;
@@ -241,7 +304,7 @@ void sendPost ()
 
   fp = fopen (temp_file, "rb");
   if (fp == 0)
-    printf ("Could not open file.\n");
+    fprintf (stderr,"Could not open file `%s'.\n", temp_file);
 
   fseek (fp, 0, SEEK_END);
   file_size = ftell (fp);
@@ -255,15 +318,6 @@ void sendPost ()
   }
   post_content.body[bi] = '\0';
   fclose (fp);
-
-  /* printf ("Title: %s\n",post_content.title); */
-  /* printf ("Tags: %s\n",post_content.tags); */
-  /* printf ("Type: %s\n",post_content.type); */
-  /* printf ("State: %s\n",post_content.state); */
-  /* printf ("Generator: %s\n",post_content.generator); */
-  /* printf ("Email: %s\n",post_content.email); */
-  /* printf ("Password: %s\n",post_content.password); */
-  /* printf ("Body: %s\n\n",buf); */
 
   /* take care of defaults */
   if (strlen (post_content.state) < 2)
@@ -322,24 +376,23 @@ void sendPost ()
   curl = curl_easy_init ();
   
   headerlist = curl_slist_append (headerlist, buf);
-  if(curl) {
+  if (curl) {
     curl_easy_setopt (curl, CURLOPT_URL, tumblrapi);
     /* if ((argc == 2) && (!strcmp (argv[1], "noexpectheader")) ) */
     /*   /\* only disable 100-continue header if explicitly requested *\/  */
     /*   curl_easy_setopt (curl, CURLOPT_HTTPHEADER, headerlist); */
     curl_easy_setopt (curl, CURLOPT_HTTPPOST, formpost);
     res = curl_easy_perform (curl);
-    
-    /* always cleanup */
-    curl_easy_cleanup (curl);
-    
-    /* then cleanup the formpost chain */
-    curl_formfree (formpost);
-    /* free slist */
-    curl_slist_free_all (headerlist);
-    remove (temp_file);
-  }
-   /* set "sent" flag */
 
-  free (post_content.body);
+	if (res == 0) { /* success */
+      /* always cleanup */
+      curl_easy_cleanup (curl);
+    
+      /* then cleanup the formpost chain */
+      curl_formfree (formpost);
+      /* free slist */
+      curl_slist_free_all (headerlist);
+  	}
+  }
+  return res;
 }
