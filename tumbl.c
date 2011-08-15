@@ -6,9 +6,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <errno.h>
 
@@ -16,12 +18,13 @@
 
 /* global variables */
 FILE *fr;
+FILE *ftmp;
 char editor [80];
-int sent = 0;
-char tumblrapi [] = "http://www.tumblr.com/api/write";
+int sent = 0, saved = 0;
+char tumblrapi [] = "http://www.tumblr.com/api/write\0";
 char *draft_filename;
 char *draft_directory;
-char *temp_file;
+char temp_file [14];
 
 /* curl */
 CURL *curl;
@@ -72,6 +75,15 @@ int main (int argc, char *argv[])
   memcpy (rc_file, config_dir, len1);
   memcpy (rc_file + len1, rc_file_name, len2 + 1);
 
+  /* set up draft dir */
+  char *xdg_data = getenv ("XDG_DATA_HOME");
+  char *draft_dir = "/tumblc/";
+  size_t lenxdgdata = strlen (xdg_data);
+  size_t lendraftdir = strlen (draft_dir);
+  draft_directory = malloc (lenxdgdata + lendraftdir + 2);
+  memcpy (draft_directory, xdg_data, lenxdgdata);
+  memcpy (draft_directory + lenxdgdata, draft_dir, lendraftdir + 1);
+
   /* read config from rc_file */
   char line [80];
   char input_string [80];
@@ -110,7 +122,14 @@ int main (int argc, char *argv[])
     strcpy (editor, getenv ("EDITOR"));
 
   /* Create temporary filename and prepare editor command */
-  temp_file = tempnam ("/tmp", "tumblc");
+  /*temp_file = tempnam ("/tmp", "tumblc");*/
+  strcpy (temp_file, "/tmp/tumblcXXXXXX\0");
+  int itemp;
+  if ((itemp = mkstemp (temp_file)) == -1) {
+	fprintf (stderr, "Cannot create temporary file: %s\n", strerror (errno));
+  }
+  close (itemp);
+
   size_t leneditor = strlen (editor);
   size_t lentemp = strlen (temp_file);
   char *edit_command = malloc (leneditor + lentemp + 2);
@@ -208,7 +227,7 @@ int main (int argc, char *argv[])
   }
 
   /* 'q' for Quit, but post not yet sent */
-  if (sent == 0) { 
+  if (sent == 0 && saved == 0) { 
     printf ("Draft is not empty. Do you want to save it? [Y/n] ");
 	char save_choice;
 	while ((menuin = getchar ()) != '\n')
@@ -224,7 +243,7 @@ int main (int argc, char *argv[])
   remove (temp_file);
   printf ("\nThank you for using tumblc.\n\n");
   return 0;
-} /* of main */
+} /* end of main () */
 
 void showMenu ()
 {
@@ -239,14 +258,11 @@ void showMenu ()
   printf ("[p] Send post to Tumblr\n");
   printf ("[q] Quit\n\n");
   return;
-}
+} /* end of showMenu () */
 
 int saveDraft ()
 {
-  /* set up draft dir */
-  char *xdg_data = getenv ("XDG_DATA_HOME");
-  char *draft_dir = "/tumblc/";
-  char *draft_location = "/tumblc/draft";
+  char *draft_prefix = "draft";
 
   char draft_str [15]; /* YYYYMMDDHHMMSS: "20110706120732\0" */
   time_t time_raw_format;
@@ -255,19 +271,14 @@ int saveDraft ()
   time_struct = localtime (&time_raw_format);
   strftime (draft_str, 16, "%Y%m%d%H%M%S", time_struct);
 
-  size_t lenxdgdata = strlen (xdg_data);
-  size_t lendraftdir = strlen (draft_dir);
-  size_t lendraftloc = strlen (draft_location);
+  size_t lendraftdir = strlen (draft_directory);
+  size_t lendraftprefix = strlen (draft_prefix);
   size_t lendraftstr = strlen (draft_str);
 
-  draft_directory = malloc (lenxdgdata + lendraftdir + 2);
-  memcpy (draft_directory, xdg_data, lenxdgdata);
-  memcpy (draft_directory + lenxdgdata, draft_dir, lendraftdir + 1);
-
-  draft_filename = malloc (lenxdgdata + lendraftloc + lendraftstr + 3);
-  memcpy (draft_filename, xdg_data, lenxdgdata);
-  memcpy (draft_filename + lenxdgdata, draft_location, lendraftloc);
-  memcpy (draft_filename + lenxdgdata + lendraftloc, draft_str, lendraftstr + 1);
+  draft_filename = malloc (lendraftdir + lendraftprefix + lendraftstr + 3);
+  memcpy (draft_filename, draft_directory, lendraftdir);
+  memcpy (draft_filename + lendraftdir, draft_prefix, lendraftprefix);
+  memcpy (draft_filename + lendraftdir + lendraftprefix, draft_str, lendraftstr + 1);
 
   printf ("Saving draft to file `%s'...", draft_filename);
 
@@ -282,23 +293,22 @@ int saveDraft ()
   fprintf (fw, "State: %s\n", post_content.state);
   fprintf (fw, "--------\n");
 
-  FILE *ft;
-  ft = fopen (temp_file, "r");
-  if (ft == 0) {
+  ftmp = fopen (temp_file, "r");
+  if (ftmp == 0) {
 	fprintf (stderr, "Could not open file `%s'.\n", temp_file);
 	return 1;
   }
   int tempc;
-  while ((tempc = fgetc(ft)) != EOF) {
+  while ((tempc = fgetc(ftmp)) != EOF) {
 	fputc (tempc, fw);
-	/*fprintf (fw, "%c", (char)tempc);*/
   }
-  close (ft);
+  fclose (ftmp);
   fclose (fw);
   printf (" Draft saved.\n");
+  saved = 1;
 
   return 0;
-}
+} /* end of saveDraft () */
 
 int loadDraft ()
 {
@@ -316,18 +326,36 @@ int loadDraft ()
   filenode* fileWalker = firstFileNode;
 
   DIR *dir;
-  FILE *fd;
   int file_count = 0;
   struct dirent *ent;
   struct stat *fileattr = malloc (sizeof (struct stat));
 
-  dir = opendir (draft_directory);
+  if ((dir = opendir (draft_directory)) == NULL) {
+	fprintf (stderr, "Error opening draft directory: %s\n", strerror (errno));
+	return -1;
+  }
+  else
+	printf ("Directory `%s' now open.\n", draft_directory);
+
+  rewinddir (dir);
+
+  size_t lendraftdir = strlen (draft_directory);
+  size_t lenfile;
+  char *fullpath;
   while ((ent = readdir (dir)) != NULL) {
-	++file_count;
-	if (stat (end->d_name, fileattr) == 0) {
+	lenfile = strlen (ent->d_name);
+	fullpath = malloc (lendraftdir + lenfile + 2);
+	memcpy (fullpath, draft_directory, lendraftdir);
+	memcpy (fullpath + lendraftdir, ent->d_name, strlen (ent->d_name) + 1);
+
+	if (stat (fullpath, fileattr) == 0) {
 	  if (S_ISDIR (fileattr->st_mode) != 0)
 		continue; /* skip directories */
 
+	  ++file_count;
+	  printf ("file: %s\n", ent->d_name);
+
+	  fileWalker->name = malloc (sizeof (ent->d_name));
 	  strcpy (fileWalker->name, ent->d_name);
 	  fileWalker->size = fileattr->st_size;
 	  fileWalker->index = file_count;
@@ -335,58 +363,57 @@ int loadDraft ()
 	  fileWalker = fileWalker->next;
 	}
 	else {
-	  fprintf (stderr, "Cannot stat file %s: %s\n", fileWalker->name,
+	  fprintf (stderr, "Cannot stat file `%s': %s\n", fileWalker->name,
 		  strerror (errno));
-	  break;
 	}
   }
   closedir (dir);
+  free (fullpath);
   free (fileattr);
 
   /*present list, enumerated*/
-  printf ("%d draft files found.\n", file_count);
+  printf ("%d draft files found.\n\n", file_count);
 
-  fileWalker = firstfileNode;
-  while (fileWalker->next != NULL) {
-	printf ("%d\t%s (%d bytes)\n", fileWalker->index, fileWalker->name,
-		fileWalker->file_size);
-  }
+  /*fileWalker = firstFileNode;*/
+  /*while (fileWalker->next != NULL) {*/
+	/*printf ("%d\t%s (%d bytes)\n", fileWalker->index, fileWalker->name,*/
+		/*fileWalker->size);*/
+  /*}*/
 
-  printf ("Enter file number: ");
-  int selection;
-  scanf ("%d", &selection);
+  /*int selection;*/
+  /*while (selection < 1 || selection > file_count) {*/
+      /*printf ("Enter file number: ");*/
+      /*scanf ("%d", &selection);*/
+
+	/*fprintf (stderr, "Error: selection out of range.\n");*/
+  /*}*/
 
   /*selected file to draft_filename*/
-  fileWalker = firstFileNode;
-  while (fileWalker->next != NULL) {
-	if (fileWalker->index != selection) {
-	  strcpy (draft_filename, fileWalker->name);
-	  break;
-	}
-	else
-	  fileWalker = fileWalker->next;
-  }
+/*  fileWalker = firstFileNode;*/
+  /*while (fileWalker->next != NULL) {*/
+	/*if (fileWalker->index == selection) {*/
+	  /*strcpy (draft_filename, fileWalker->name);*/
+	  /*break;*/
+	/*}*/
+	/*else*/
+	  /*fileWalker = fileWalker->next;*/
+  /*}*/
 
-  /*read file*/
-  FILE *fd;
-  fd = fopen (draft_filename);
-  if (fd == 0) {
-	fprintf (stderr, "Error opening file `%s': %s\n", draft_filename, strerror (errno));
-	return 1;
-  }
-  char *buff = malloc (fileWalker->size);;
-  int dc, ci = 0;
-  while ((dc = fgetc (fd)) != EOF) {
-	buff[ci] = dc;
-	++ci;
-  }
+  /*[>read file<]*/
+  /*FILE *fd;*/
+  /*fd = fopen (draft_filename, "r");*/
+  /*if (fd == 0) {*/
+	/*fprintf (stderr, "Error opening file `%s': %s\n", draft_filename, strerror (errno));*/
+	/*return 1;*/
+  /*}*/
 
-  /*parse file contents into variables*/
-  ci = 0;
-  char buf [80];
+  /*copy method from reading RC file above in main()*/
 
+  /*dump remaining content into temp file*/
+
+  free (firstFileNode);
   return 0;
-}
+} /* end of loadDraft () */
 
 int sendPost ()
 {
@@ -488,4 +515,4 @@ int sendPost ()
   	}
   }
   return res;
-}
+} /* end of sendPost */
