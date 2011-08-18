@@ -17,7 +17,6 @@
 #include <curl/curl.h>
 
 /* global variables */
-FILE *fr;
 FILE *ftmp;
 char editor [80];
 int sent = 0, saved = 0;
@@ -92,6 +91,7 @@ int main (int argc, char *argv[])
   char field [80];
   int i, j;
 
+  FILE *fr;
   fr = fopen (rc_file, "r");
   while (fgets (line, 80, fr) != NULL) {
     sscanf (line, "%s", &input_string);
@@ -227,7 +227,7 @@ int main (int argc, char *argv[])
   }
 
   /* 'q' for Quit, but post not yet sent */
-  if (sent == 0 && saved == 0) { 
+  if (post_content.body != NULL && sent == 0 && saved == 0) { 
     printf ("Draft is not empty. Do you want to save it? [Y/n] ");
 	char save_choice;
 	while ((menuin = getchar ()) != '\n')
@@ -335,7 +335,7 @@ int loadDraft ()
 	return -1;
   }
   else
-	printf ("Directory `%s' now open.\n", draft_directory);
+	printf ("\nDirectory `%s':\n", draft_directory);
 
   rewinddir (dir);
 
@@ -346,19 +346,21 @@ int loadDraft ()
 	lenfile = strlen (ent->d_name);
 	fullpath = malloc (lendraftdir + lenfile + 2);
 	memcpy (fullpath, draft_directory, lendraftdir);
-	memcpy (fullpath + lendraftdir, ent->d_name, strlen (ent->d_name) + 1);
+	memcpy (fullpath + lendraftdir, ent->d_name, lenfile + 1);
 
 	if (stat (fullpath, fileattr) == 0) {
 	  if (S_ISDIR (fileattr->st_mode) != 0)
 		continue; /* skip directories */
 
 	  ++file_count;
-	  printf ("file: %s\n", ent->d_name);
 
 	  fileWalker->name = malloc (sizeof (ent->d_name));
 	  strcpy (fileWalker->name, ent->d_name);
 	  fileWalker->size = fileattr->st_size;
 	  fileWalker->index = file_count;
+
+	  printf ("%d   %s (%d bytes)\n", fileWalker->index, fileWalker->name, fileWalker->size);
+
 	  fileWalker->next = malloc (sizeof (filenode));
 	  fileWalker = fileWalker->next;
 	}
@@ -372,42 +374,65 @@ int loadDraft ()
   free (fileattr);
 
   /*present list, enumerated*/
-  printf ("%d draft files found.\n\n", file_count);
+  printf ("\n%d draft files found.\n\n", file_count);
 
-  /*fileWalker = firstFileNode;*/
-  /*while (fileWalker->next != NULL) {*/
-	/*printf ("%d\t%s (%d bytes)\n", fileWalker->index, fileWalker->name,*/
-		/*fileWalker->size);*/
-  /*}*/
 
-  /*int selection;*/
-  /*while (selection < 1 || selection > file_count) {*/
-      /*printf ("Enter file number: ");*/
-      /*scanf ("%d", &selection);*/
+  int selection;
+  while (selection < 1 || selection > file_count) {
+      printf ("Enter file number: ");
+      scanf ("%d", &selection);
 
 	/*fprintf (stderr, "Error: selection out of range.\n");*/
-  /*}*/
+  }
 
   /*selected file to draft_filename*/
-/*  fileWalker = firstFileNode;*/
-  /*while (fileWalker->next != NULL) {*/
-	/*if (fileWalker->index == selection) {*/
-	  /*strcpy (draft_filename, fileWalker->name);*/
-	  /*break;*/
-	/*}*/
-	/*else*/
-	  /*fileWalker = fileWalker->next;*/
-  /*}*/
+  fileWalker = firstFileNode;
+  while (fileWalker->next != NULL) {
+	if (fileWalker->index == selection) {
+	  strcpy (draft_filename, fileWalker->name);
+	  break;
+	}
+	else
+	  fileWalker = fileWalker->next;
+  }
 
-  /*[>read file<]*/
-  /*FILE *fd;*/
-  /*fd = fopen (draft_filename, "r");*/
-  /*if (fd == 0) {*/
-	/*fprintf (stderr, "Error opening file `%s': %s\n", draft_filename, strerror (errno));*/
-	/*return 1;*/
-  /*}*/
+  /*read file*/
+  FILE *fd;
+  fd = fopen (draft_filename, "r");
+  if (fd == 0) {
+	fprintf (stderr, "Error opening file `%s': %s\n", draft_filename, strerror (errno));
+	return 1;
+  }
 
   /*copy method from reading RC file above in main()*/
+  char line [80];
+  char input_string [80];
+  char field_name [80];
+  char field_value [80];
+  char field [80];
+  int i, j;
+
+  while (fgets (line, 80, fd) != NULL) {
+    sscanf (line, "%s", &input_string);
+    for (i = 0; input_string[i] != ':'; i++) {
+      field_name[i] = input_string[i];
+    }
+    field_name[i] = '\0';
+    ++i;
+
+    for (j = 0; input_string[i] != '\0'; i++) {
+      field_value[j] = input_string[i];
+      ++j;
+    }
+    field_value[j] = '\0';
+    
+    if (strcmp (field_name, "Title\0") == 0)
+      strcpy (post_content.title, field_value);
+    else if (strcmp (field_name, "Tags\0") == 0)
+      strcpy (post_content.tags, field_value);
+    else if (strcmp (field_name, "State\0") == 0)
+      strcpy (post_content.state, field_value);
+  }
 
   /*dump remaining content into temp file*/
 
